@@ -1,4 +1,8 @@
 % -----------------------------------------------------------------
+% Source (Please cite the paper if you use this algorithm in other applications):
+% Machine Learning Projection Methods for Macro-finance Models
+% https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3209934
+%
 % Author's page:
 % https://sites.google.com/view/alessandrovilla/
 % -----------------------------------------------------------------
