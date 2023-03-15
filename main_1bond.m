@@ -8,8 +8,8 @@
 % https://sites.google.com/view/vytautas-valaitis/home
 %
 % Purpose of the code:
-% Solve the Ramsey taxation problem with one non-state-contingent bond 
-% using the ANN-based expectations algorithm 
+% Solve the Ramsey taxation problem with one non-state-contingent bond
+% using the ANN-based expectations algorithm
 %
 % -----------------------------------------------------------------
 
@@ -21,7 +21,7 @@ rng(10);
 addpath('./Utils/');
 
 %% Government expenditure AR(1) parameters
-infinityHorizon = 1000;
+infinityHorizon = 5000;
 const           = 0.004161764705882;
 variance        = 1.109550560082420e-05;
 
@@ -34,19 +34,27 @@ g=g(1:infinityHorizon);
 gMean = mean(g);
 gmean = mean(g)*(1-phi1);
 
-cutInit = 15;
-cutEnd  = 50;
+g = max(min(g,0.35*0.33),0.15*0.33);  % restrict g to be between 15% and 35% of the GDP.
 
+
+%% algorithm parameters
+
+cutInit = 15;
+cutEnd  = 0;
+burnin=2;
 startingbound=0.01;
+
+BoundStep = 0.005;
+outofbounfloops=0;
+numboutofbound=700;
+tolerance = 1e-11; tolerance_mean = 1e-4;
 
 %% Variable declaration
 
-N = 1;
-burnin=N+1;
 beta=0.96;
 A=1;
-Bmax=(1/3)*2;
-Bmin=-(1/3)*2;
+Bmax=(1/3)*1.5;
+Bmin=-(1/3)*1.5;
 maxIterations=1000;
 numIterationToFinish=maxIterations;
 
@@ -55,14 +63,12 @@ errorHist2=zeros(1,maxIterations);
 errorHist3=zeros(1,maxIterations);
 
 warning('off')
-% opt = optimoptions('fsolve','Display','off','Algorithm','Levenberg-Marquardt','MaxIterations',1000,'MaxFunctionEvaluation',1000);%,'FunctionTolerance',1e-9,'OptimalityTolerance',1e-14);
 
-opt = optimset('fzero');
 opt = optimset('Display','off');
+phi=90;
 
 
-
-%% Utility Functions
+%% Model parameters and Functions
 gamma=1.5;
 eta=1.8;%4;
 B =  2.872727272727273; %;2.7310;
@@ -75,6 +81,7 @@ v=@(l) B*l.^(1-eta)./(1-eta);
 dv=@(l) B*l.^(-eta);
 ddv=@(l) -eta*B*l.^(-eta-1);
 
+
 %% Initialization sequence for the neural network
 c=zeros(1,infinityHorizon);
 % lambda - recursive multiplyer.
@@ -83,28 +90,22 @@ b = zeros(1,infinityHorizon);
 zeta_low = zeros(1,infinityHorizon);
 zeta_up  = zeros(1,infinityHorizon);
 
-b(N+1:end) = 2*(movmean(g(N+1:end),40)/2-mean(g/2));
-
-%b = g/2-mean(g/2);
+b(1+1:end) = 2*(movmean(g(1+1:end),40)/2-mean(g/2));
 
 Blower = -startingbound;
 Bupper =  startingbound;
 
 meanc = 1-mean(g)-2/3;
-for t=N+1:infinityHorizon
-    income= @(ct) -b(t-1)*beta^(N-1)*du(meanc*0.9+0.1*ct)-g(t)*du(ct)+(du(ct)-dv(A-ct-g(t)))*(g(t)+ct)+b(t)*beta^N*du(meanc);
+for t=1+1:infinityHorizon
+    income= @(ct) -b(t-1)*du(meanc*0.9+0.1*ct)-g(t)*du(ct)+(du(ct)-dv(A-ct-g(t)))*(g(t)+ct)+b(t)*beta*du(meanc);
     [c(t), fvalBudget]=fsolve(income,(A-g(t))/3,opt);
     
-    if N>1
-        lambda(t) = -(du(c(t))-dv(A-c(t)-g(t))+ddu(c(t))*((lambda(t-N)-lambda(t-N+1))*b(t-N)))/(ddu(c(t))*c(t)+du(c(t))+ddv(A-c(t)-g(t))*(c(t)+g(t))-dv(A-c(t)-g(t)));
-    else
-        lambda(t) = (dv(A-c(t)-g(t))-ddu(c(t))*(lambda(t-N))*b(t-N)-du(c(t)))/(ddu(c(t))*c(t)+du(c(t))+ddv(A-c(t)-g(t))*(c(t)+g(t))-dv(A-c(t)-g(t))-ddu(c(t))*b(t-N));
-    end
+    lambda(t) = (dv(A-c(t)-g(t))-ddu(c(t))*(lambda(t-1))*b(t-1)-du(c(t)))/(ddu(c(t))*c(t)+du(c(t))+ddv(A-c(t)-g(t))*(c(t)+g(t))-dv(A-c(t)-g(t))-ddu(c(t))*b(t-1));
+    
 end
 
 
-phi=90;
-for t=N+1:infinityHorizon-N
+for t=1+1:infinityHorizon-1
     if b(t)<Blower
         zeta_low(t) = phi*(Blower-b(t))+log(1+phi*(Blower-b(t)));   %    +beta^N*du(c(t+N))/du(c(t))*lambda(t) - beta^N*du(c(t+N))/du(c(t))*lambda(t+1);
     elseif b(t)>Bupper
@@ -115,11 +116,9 @@ for t=N+1:infinityHorizon-N
     
 end
 
-output1=du(c(burnin+N:end)).*lambda(burnin+1:end-N+1);
-output2=du(c(burnin+N:end));
-output3=du(c(burnin+N-1:end-1));
+output1=du(c(burnin+1:end)).*lambda(burnin+1:end-1+1);
+output2=du(c(burnin+1:end));
 
-cInit = c;
 
 %% Create and initialize a single hidden layer neural network
 neurons = 10;
@@ -131,40 +130,36 @@ net.trainParam.showWindow=0; %Default: 1
 net.layers{1}.transferFcn = 'tansig';
 
 
-% Create matrix of inputs to train the neural network 
+% Create matrix of inputs to train the neural network
 string1='';
-string1='X= [g(burnin:end-N)';
-for z=1:N
-    string1=[string1 ';lambda(burnin-' int2str(z) ' :end-N-' int2str(z) ');b(burnin-' int2str(z) ':end-N-' int2str(z) ');zeta_up(burnin-' int2str(z) ':end-N- ' int2str(z) ');zeta_low(burnin-' int2str(z) ':end-N- ' int2str(z) ')'];
+string1='X= [g(burnin:end-1)';
+for z=1:1
+    string1=[string1 ';lambda(burnin-' int2str(z) ' :end-1-' int2str(z) ');b(burnin-' int2str(z) ':end-1-' int2str(z) ');zeta_up(burnin-' int2str(z) ':end-1- ' int2str(z) ');zeta_low(burnin-' int2str(z) ':end-1- ' int2str(z) ')'];
 end
 string1=[string1 '];'];
 eval(string1);
 
 % Use the initialization sequence to initially train the neural network
-% [net,tr] = train(net ,X(:,cutInit:end-cutEnd),[output1(cutInit:end-cutEnd);output2(cutInit:end-cutEnd);output3(cutInit:end-cutEnd);]);
-  [net,tr] = train(net ,X(:,cutInit:end-cutEnd),[output1(cutInit:end-cutEnd);output2(cutInit:end-cutEnd);]);
+[net,tr] = train(net ,X(:,cutInit:end-cutEnd),[output1(cutInit:end-cutEnd);output2(cutInit:end-cutEnd);]);
 
 string='';
 string='state=@(gp,Lambda,b,zeta_up,zeta_low,t) [gp';
-for i=1:N
+for i=1:1
     string=[string ';Lambda(t-' int2str(i) ');b(t-' int2str(i) ');zeta_up(t-' int2str(i) ');zeta_low(t-' int2str(i) ')'];
 end
 string=[string '];'];
 eval(string);
 
 
+
+
 %% Simulate
 
 Bound(1) = startingbound;
 i=1;
-BoundStep = 0.01;%0.0025;
-outofbounfloops=0;
-numboutofbound=700;
+
 disp(['Starting Bound: ' num2str(Bound(i))])
 FirstReverse=false;
-
-
-tolerance = 1e-11; tolerance_mean = 1e-4;
 
 while (Bound(i)<Bmax || outofbounfloops<numboutofbound)
     
@@ -196,7 +191,7 @@ while (Bound(i)<Bmax || outofbounfloops<numboutofbound)
     zeta_low = zeros(1,infinityHorizon);
     
     % Simulate the sequence by solving the FOCs, given the neural network prediction
-    for t=N+1:infinityHorizon
+    for t=1+1:infinityHorizon
         
         stateCurr=state(g(t),lambda,b,zeta_up,zeta_low,t);
         
@@ -204,81 +199,57 @@ while (Bound(i)<Bmax || outofbounfloops<numboutofbound)
         
         Edulambda=temp_output(1);
         Edu=temp_output(2);
- %       Eduoneless=temp_output(3);
         
         Edulambda_rec(t)  = Edulambda;
         Edu_rec(t)        = Edu;
- %       Eduoneless_rec(t) = Eduoneless;
         
         % FOC wrt b_{t+1}
         lambda(t)=Edulambda/Edu;
-        
         lambda(t) = min(lambda(t),10);
-
-      
-        L = @(ct) -[lambda(t)*(ddu(ct)*ct+du(ct)+ddv(A-ct-g(t))*(ct+g(t))-dv(A-ct-g(t))-ddu(ct)*b(t-N)) - (dv(A-ct-g(t))-ddu(ct)*(lambda(t-N))*b(t-N)-du(ct))].^2;
-
-
- 
-        [c(t), fval(t)] = golden(L,0.22,0.29);     
-
-
+        
+        
+        L = @(ct) -[lambda(t)*(ddu(ct)*ct+du(ct)+ddv(A-ct-g(t))*(ct+g(t))-dv(A-ct-g(t))-ddu(ct)*b(t-1)) - (dv(A-ct-g(t))-ddu(ct)*(lambda(t-1))*b(t-1)-du(ct))].^2;
+        
+        [c(t), fval(t)] = golden(L,0.22,0.29);
+        
+        
         % Government Budget constraint
-        if N>1
-            b(t)=(beta^(N-1)*Eduoneless*b(t-1)+g(t)*du(c(t))-(du(c(t))-dv(A-c(t)-g(t)))*(g(t)+c(t)))/(beta^(N)*Edu);
-        else
-            b(t)=(beta^(N-1)*du(c(t))*b(t-1)+g(t)*du(c(t))-(du(c(t))-dv(A-c(t)-g(t)))*(g(t)+c(t)))/(beta^(N)*Edu);
-        end
+        
+        b(t)=(du(c(t))*b(t-1)+g(t)*du(c(t))-(du(c(t))-dv(A-c(t)-g(t)))*(g(t)+c(t)))/(beta*Edu);
         
         if b(t)<max(Bmin, Blower)
             b(t)=max(Bmin, Blower);
             % Government Budget constraint
-            if N>1
-                BC=@(ct) -[b(t)-(b(t-1)*beta^(N-1)*Eduoneless-g(t)*du(ct)+(du(ct)-dv(A-ct-g(t))).*(g(t)+ct))/(beta^N*Edu)].^2;
-            else
-                BC=@(ct) -[b(t)-(b(t-1)*beta^(N-1)*du(ct)-g(t)*du(ct)+(du(ct)-dv(A-ct-g(t))).*(g(t)+ct))/(beta^N*Edu)].^2;
-            end
-
-            [c(t), fval(t)] = golden(BC,0.22,0.30);       
-               
-
-            % FOC wrt c_{t}
-            if N>1
-                lambda(t) = (dv(A-c(t)-g(t))-ddu(c(t))*(lambda(t-N)-lambda(t-N+1))*b(t-N)-du(c(t)))/(ddu(c(t))*c(t)+du(c(t))+ddv(A-c(t)-g(t))*(c(t)+g(t))-dv(A-c(t)-g(t)));
-            else
-                lambda(t) = (dv(A-c(t)-g(t))-ddu(c(t))*(lambda(t-N))*b(t-N)-du(c(t)))/(ddu(c(t))*c(t)+du(c(t))+ddv(A-c(t)-g(t))*(c(t)+g(t))-dv(A-c(t)-g(t))-ddu(c(t))*b(t-N));
-            end
             
-            zeta_low(t) = -beta^N*Edu*lambda(t) + beta^N*Edulambda;
+            BC=@(ct) -[b(t)-(b(t-1)*beta*du(ct)-g(t)*du(ct)+(du(ct)-dv(A-ct-g(t))).*(g(t)+ct))/(beta*Edu)].^2;
+            
+            [c(t), fval(t)] = golden(BC,0.22,0.30);
+            
+            
+            % FOC wrt c_{t}
+            lambda(t) = (dv(A-c(t)-g(t))-ddu(c(t))*(lambda(t-1))*b(t-1)-du(c(t)))/(ddu(c(t))*c(t)+du(c(t))+ddv(A-c(t)-g(t))*(c(t)+g(t))-dv(A-c(t)-g(t))-ddu(c(t))*b(t-1));
+            
+            zeta_low(t) = -beta*Edu*lambda(t) + beta*Edulambda;
         elseif b(t)>min(Bmax, Bupper)
             b(t)=min(Bmax, Bupper);
             % Government Budget constraint
-            if N>1
-                BC=@(ct) -[b(t)-(b(t-1)*beta^(N-1)*Eduoneless-g(t)*du(ct)+(du(ct)-dv(A-ct-g(t))).*(g(t)+ct))/(beta^N*Edu)].^2;
-            else
-                BC=@(ct) -[b(t)-(b(t-1)*beta^(N-1)*du(ct)-g(t)*du(ct)+(du(ct)-dv(A-ct-g(t))).*(g(t)+ct))/(beta^N*Edu)].^2;
-            end
-
-            [c(t), fval(t)] = golden(BC,0.22,0.30);           
-   
-
-            if N>1
-                lambda(t) = (dv(A-c(t)-g(t))-ddu(c(t))*(lambda(t-N)-lambda(t-N+1))*b(t-N)-du(c(t)))/(ddu(c(t))*c(t)+du(c(t))+ddv(A-c(t)-g(t))*(c(t)+g(t))-dv(A-c(t)-g(t)));
-            else
-                lambda(t) = (dv(A-c(t)-g(t))-ddu(c(t))*(lambda(t-N))*b(t-N)-du(c(t)))/(ddu(c(t))*c(t)+du(c(t))+ddv(A-c(t)-g(t))*(c(t)+g(t))-dv(A-c(t)-g(t))-ddu(c(t))*b(t-N));
-            end
-
-            zeta_up(t) = -beta^N*Edulambda + beta^N*Edu*lambda(t);
+            BC=@(ct) -[b(t)-(b(t-1)*beta*du(ct)-g(t)*du(ct)+(du(ct)-dv(A-ct-g(t))).*(g(t)+ct))/(beta*Edu)].^2;
+            
+            [c(t), fval(t)] = golden(BC,0.22,0.30);
+            
+            lambda(t) = (dv(A-c(t)-g(t))-ddu(c(t))*(lambda(t-1))*b(t-1)-du(c(t)))/(ddu(c(t))*c(t)+du(c(t))+ddv(A-c(t)-g(t))*(c(t)+g(t))-dv(A-c(t)-g(t))-ddu(c(t))*b(t-1));
+            
+            zeta_up(t) = -beta*Edulambda + beta*Edu*lambda(t);
         end
     end
     i
-
+    
     %Prepare data for regression. In the regression use X's only starting
     %from N+1. so the first forecasted period t+N will be N+N+1
     
     info(:,i) = mean(fval')';
     info(:,i)
-
+    
     if i>2 && (max(abs(info(:,i)))>tolerance_mean || min(isreal(info(:,i)))==0)
         if FirstReverse==false
             i=i-1;
@@ -293,20 +264,20 @@ while (Bound(i)<Bmax || outofbounfloops<numboutofbound)
             continue;
         end
     end
-
-
+    
+    
     string1='';
     
-    string1='X= [g(burnin:end-N)';
-    for z=1:N
-        string1=[string1 ';lambda(burnin-' int2str(z) ' :end-N-' int2str(z) ');b(burnin-' int2str(z) ':end-N-' int2str(z) ');zeta_up(burnin-' int2str(z) ':end-N- ' int2str(z) ');zeta_low(burnin-' int2str(z) ':end-N-' int2str(z) ')'];
+    string1='X= [g(burnin:end-1)';
+    for z=1:1
+        string1=[string1 ';lambda(burnin-' int2str(z) ' :end-1-' int2str(z) ');b(burnin-' int2str(z) ':end-1-' int2str(z) ');zeta_up(burnin-' int2str(z) ':end-1- ' int2str(z) ');zeta_low(burnin-' int2str(z) ':end-1-' int2str(z) ')'];
     end
     string1=[string1 '];'];
     
     eval(string1);
     
-    output1=du(c(burnin+N:end)).*lambda(burnin+1:end-N+1);
-    output2=du(c(burnin+N:end));
+    output1=du(c(burnin+1:end)).*lambda(burnin+1:end-1+1);
+    output2=du(c(burnin+1:end));
     
     %Check error and update weights
     for t=burnin:infinityHorizon
@@ -324,26 +295,26 @@ while (Bound(i)<Bmax || outofbounfloops<numboutofbound)
     distance(i) = norm(net.IW{1}-prevnet.IW{1}) + norm(net.LW{2,1}-prevnet.LW{2,1}) + norm(net.b{1}-prevnet.b{1}) + norm(net.b{2}-prevnet.b{2});
     
     
-    errorHist1(i)=sum(abs(errorHist1_temp(cutInit:end-N-cutEnd) - output1(cutInit:end-cutEnd)))/(infinityHorizon-cutInit-cutEnd);
-    errorHist2(i)=sum(abs(errorHist2_temp(cutInit:end-N-cutEnd) - output2(cutInit:end-cutEnd)))/(infinityHorizon-cutInit-cutEnd);
-   
+    errorHist1(i)=sum(abs(errorHist1_temp(cutInit:end-1-cutEnd) - output1(cutInit:end-cutEnd)))/(infinityHorizon-cutInit-cutEnd);
+    errorHist2(i)=sum(abs(errorHist2_temp(cutInit:end-1-cutEnd) - output2(cutInit:end-cutEnd)))/(infinityHorizon-cutInit-cutEnd);
+    
     
     if i>3
         dist_b(i) = sum(abs(b-b_old));
-        errorhist(i) = errorHist1(i) + errorHist2(i);% + errorHist3(i);
+        errorhist(i) = errorHist1(i) + errorHist2(i);
         
-        if (abs(errorhist(i)-errorhist(i-1))<1e-5 && max(dist_b(i-2:i))<1e-4 && Bound(i)==Bmax)
+        if (abs(errorhist(i)-errorhist(i-1))<1e-6 && max(dist_b(i-2:i))<1e-5 && Bound(i)==Bmax)
             numIterationToFinish=i;
-              break;
+            break;
         end
     end
     
-
+    
     b_old = b;
     
     cStore(i,:) = c;
-    bStore(i,:) = b;    
-
+    bStore(i,:) = b;
+    
     i=i+1;
     
     if FirstReverse==false
@@ -363,55 +334,44 @@ end
 
 %% Plot Final Result
 displayPeriods=900;
+
 labor=c(1:displayPeriods)+g(1:displayPeriods);
 leisure=A-labor;
-
 tau=1-dv(leisure)./du(c(1:displayPeriods));
 
-start = N+1;
+start = 2;
 X=start:displayPeriods;
 
 
 EstimateSymbol='k-';
 RealizedSymbol='b'; %k
 
-figure(2)
+figure
 subplot(2,1,1)
 plot(X,errorHist1_temp(start:displayPeriods),EstimateSymbol,X,output1(start:displayPeriods),RealizedSymbol)
-title('Fitting for $E_t[u_{c,t+N}\lambda_{t+1}]$','Interpreter','Latex')
+title('Fitting for $E_t[u_{c,t+1}\lambda_{t+1}]$','Interpreter','Latex')
 legend('Neural-estimate','Realized')
 xlabel('Time (t)')
 
 subplot(2,1,2)
 plot(X,errorHist2_temp(start:displayPeriods),EstimateSymbol,X,output2(start:displayPeriods),RealizedSymbol)
-title('Fitting for $E_t[u_{c,t+N}]$','Interpreter','Latex')
+title('Fitting for $E_t[u_{c,t+1}]$','Interpreter','Latex')
 legend('Neural-estimate','Realized')
-xlabel('Time (t)')
-
-
-X=1:length(b(N+1:displayPeriods));
-figure(3)
-subplot(3,1,1)
-plot(X,b(N+1:displayPeriods),'k--',X,(tau(N+1:displayPeriods).*labor(N+1:displayPeriods)-g(N+1:displayPeriods)),'k.')
-legend('Debt: b_t','Gvt surplus: \tau_t*labor_t-g_t','Interpreter','Latex')
-xlabel('Time (t)')
-
-subplot(3,1,2)
-plot(X,g(N+1:displayPeriods),'k:',X,c(N+1:displayPeriods),'k--',X,tau(N+1:displayPeriods),'k.')
-legend('Gvt exp: g_t','Consumption: c_t','Tax: \tau_t','Interpreter','Latex')
-xlabel('Time (t)')
-
-subplot(3,1,3)
-plot(X,b(N+1:displayPeriods),'k--',X,g(N+1:displayPeriods),'k.')
-legend('Debt: b_t','Gvt expenditure','Interpreter','Latex')
 xlabel('Time (t)')
 
 hline = 2;
 figure
-plot(X,b(N+1:displayPeriods),'b-', 'linewidth', hline,'Color', [0.0, 90.0/256, 191.0/256])
+plot(X,b(1+1:displayPeriods),'b-', 'linewidth', hline,'Color', [0.0, 90.0/256, 191.0/256])
 hold on
-plot(X,g(N+1:displayPeriods),'r', 'linewidth', hline,'Color', [196/256, 0.0, 100.0/256])
+plot(X,g(1+1:displayPeriods),'r', 'linewidth', hline,'Color', [196/256, 0.0, 100.0/256])
 legend('Debt: b_t','Gvt expenditure','Interpreter','Latex')
 xlabel('Time (t)')
+
+
+
+
+
+
+
 
 
